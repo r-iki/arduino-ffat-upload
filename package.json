@@ -1,0 +1,60 @@
+{
+  "name": "arduino-ffat-upload",
+  "displayName": "arduino-ffat-upload",
+  "description": "Build and upload FFAT (FAT) filesystems for the ESP32 Arduino core under Arduino IDE 2.2.1 or higher",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "license": "MIT",
+  "publisher": "arduino-ffat",
+  "repository": {
+    "url": "git+https://github.com/r-iki/arduino-ffat-upload.git"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "arduino",
+    "esp32",
+    "ffat",
+    "fat",
+    "filesystem",
+    "upload"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "arduino-ffat-upload.uploadFFAT",
+        "title": "Upload FFAT to ESP32"
+      },
+      {
+        "command": "arduino-ffat-upload.buildFFAT",
+        "title": "Build FFAT image in sketch directory"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "16.x",
+    "@types/vscode": "^1.82.0",
+    "@vscode/test-electron": "^2.3.4",
+    "typescript": "^5.1.6",
+    "vscode-arduino-api": "ide2"
+  },
+  "dependencies": {},
+  "bugs": {
+    "url": "https://github.com/r-iki/arduino-ffat-upload/issues"
+  },
+  "homepage": "https://github.com/r-iki/arduino-ffat-upload#readme",
+  "author": "riki"
+}
