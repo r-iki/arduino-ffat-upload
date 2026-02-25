@@ -1,7 +1,7 @@
 {
   "name": "arduino-ffat-upload",
-  "displayName": "arduino-ffat-upload",
-  "description": "Build and upload FFAT (FAT) filesystems for the ESP32 Arduino core under Arduino IDE 2.2.1 or higher",
+  "displayName": "ESP32 FFAT Filesystem Uploader",
+  "description": "Upload files from the 'data' folder to ESP32 FFAT (FAT) filesystem partition directly from Arduino IDE 2. Supports ESP32/ESP32-S2/ESP32-S3/ESP32-C3 with auto-detection of partition layout, mkfatfs tool, and serial port.",
   "version": "1.0.0",
   "engines": {
     "vscode": "^1.82.0"
@@ -17,10 +17,16 @@
   "keywords": [
     "arduino",
     "esp32",
+    "esp32s2",
+    "esp32s3",
+    "esp32c3",
     "ffat",
     "fat",
     "filesystem",
-    "upload"
+    "upload",
+    "flash",
+    "partition",
+    "webserver"
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
