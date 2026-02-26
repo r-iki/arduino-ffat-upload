@@ -97,6 +97,116 @@ function color(
         }m${text}${resetStyle}`;
 }
 
+// ============================================================
+// ESP32 Wear-Leveling (WL) layer support
+// The ESP32 FFat library (ESP-IDF 5.x) uses a wear-leveling
+// layer on top of raw FAT. mkfatfs creates raw FAT images
+// without WL, so we need to wrap them.
+// ============================================================
+
+// CRC32 matching ESP-IDF's esp_rom_crc32_le(0xFFFFFFFF, ...)
+// Note: NO final XOR (unlike standard CRC32)
+function wlCrc32(buf: Buffer): number {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+        crc ^= buf[i];
+        for (let j = 0; j < 8; j++) {
+            crc = (crc & 1) ? ((crc >>> 1) ^ 0xEDB88320) : (crc >>> 1);
+        }
+    }
+    return crc >>> 0;
+}
+
+// Calculate WL partition layout (matching ESP-IDF 5.x WL_Flash::init)
+function calculateWLLayout(partitionSize: number, sectorSize: number = 4096) {
+    const WL_STATE_HEADER_SIZE = 64; // sizeof(wl_state_t)
+
+    // cfg_size: wl_config_t (36 bytes) aligned up to sector boundary
+    const cfgSize = Math.ceil(36 / sectorSize) * sectorSize; // = 4096
+
+    // State size: header + one uint32 per sector in entire partition
+    const numSectors = Math.floor(partitionSize / sectorSize);
+    const stateRawSize = WL_STATE_HEADER_SIZE + numSectors * 4;
+    const stateSize = Math.ceil(stateRawSize / sectorSize) * sectorSize;
+
+    // Addresses matching ESP-IDF layout:
+    // [FAT data | dummy sector | ... | state1 | state2 | config]
+    const addrCfg = partitionSize - cfgSize;
+    const addrState1 = partitionSize - cfgSize - stateSize * 2;
+    const addrState2 = partitionSize - cfgSize - stateSize;
+
+    // flash_size = usable FAT data area
+    // Formula from ESP-IDF: align_down((addr_state1 / page_size - 1) * page_size, sector_size)
+    const flashSize = (Math.floor(addrState1 / sectorSize) - 1) * sectorSize;
+
+    // max_pos = data sectors + 1 dummy sector
+    const maxPos = Math.floor(flashSize / sectorSize) + 1;
+
+    return { stateSize, cfgSize, flashSize, maxPos, addrCfg, addrState1, addrState2 };
+}
+
+// Wrap a raw FAT image with ESP-IDF wear-leveling layer
+function wrapWithWearLeveling(fatImage: Buffer, partitionSize: number, sectorSize: number = 4096): Buffer {
+    const { stateSize, flashSize, maxPos, addrCfg, addrState1, addrState2 } = calculateWLLayout(partitionSize, sectorSize);
+
+    if (fatImage.length !== flashSize) {
+        throw new Error(`FAT image size (${fatImage.length}) doesn't match expected WL flash_size (${flashSize}). Partition: ${partitionSize}, expected FAT: ${flashSize}`);
+    }
+
+    // Create full partition image filled with 0xFF (erased flash)
+    const image = Buffer.alloc(partitionSize, 0xFF);
+
+    // WL sector mapping with pos=0:
+    //   calcAddr(logical) = logical + (pos+1) * page_size = logical + 4096
+    // So physical sector 0 is the DUMMY sector (stays 0xFF).
+    // FAT data (logical sector 0) maps to physical sector 1 (offset 4096).
+    fatImage.copy(image, sectorSize);
+
+    // === Build wl_config_t (36 bytes) ===
+    // Must match exactly what ESP32 FFat.begin() / wl_mount() creates
+    const configBuf = Buffer.alloc(36, 0);
+    configBuf.writeUInt32LE(0, 0);              // start_addr
+    configBuf.writeUInt32LE(partitionSize, 4);  // full_mem_size
+    configBuf.writeUInt32LE(sectorSize, 8);     // page_size
+    configBuf.writeUInt32LE(sectorSize, 12);    // sector_size
+    configBuf.writeUInt32LE(16, 16);            // updaterate
+    configBuf.writeUInt32LE(16, 20);            // wr_size
+    configBuf.writeUInt32LE(2, 24);             // version (WL V2 for ESP-IDF 5.x)
+    configBuf.writeUInt32LE(32, 28);            // temp_buff_size
+    const configCrc = wlCrc32(configBuf.subarray(0, 32));
+    configBuf.writeUInt32LE(configCrc, 32);     // crc
+
+    // Write config to image at addrCfg
+    configBuf.copy(image, addrCfg);
+
+    // device_id = CRC of wl_config_t (first 32 bytes)
+    const deviceId = configCrc;
+
+    // === Build wl_state_t header (64 bytes) ===
+    // Matches ESP-IDF initSections(): memset(0) then fill fields
+    const stateHeader = Buffer.alloc(64, 0);
+    stateHeader.writeUInt32LE(0, 0);              // pos = 0
+    stateHeader.writeUInt32LE(maxPos, 4);         // max_pos
+    stateHeader.writeUInt32LE(0, 8);              // move_count = 0
+    stateHeader.writeUInt32LE(0, 12);             // access_count = 0
+    stateHeader.writeUInt32LE(16, 16);            // max_count (= updaterate)
+    stateHeader.writeUInt32LE(sectorSize, 20);    // block_size (= page_size)
+    stateHeader.writeUInt32LE(2, 24);             // version = WL V2
+    stateHeader.writeUInt32LE(deviceId, 28);      // device_id
+    // reserved[7] at bytes 32-59 already zero from Buffer.alloc(64, 0)
+    // CRC of first 60 bytes
+    const stateCrc = wlCrc32(stateHeader.subarray(0, 60));
+    stateHeader.writeUInt32LE(stateCrc, 60);      // crc
+
+    // === Write state1 and state2 ===
+    // Only write the 64-byte header; position table area stays 0xFF (erased)
+    // This matches ESP-IDF initSections() which erases flash then writes header only
+    stateHeader.copy(image, addrState1);
+    stateHeader.copy(image, addrState2);
+
+    return image;
+}
+
 function fancyParseInt(str: string): number {
     var up = str.toUpperCase().trim();
     if (up === "") {
@@ -423,9 +533,14 @@ async function doOperation(context: vscode.ExtensionContext, arduinoContext: Ard
     // FAT filesystem parameters
     let fsSize = fsEnd - fsStart;
 
-    // Build the FAT image using mkfatfs
-    // mkfatfs options: -c <data_dir> -s <size> [-S <sector_size>] <image_file>
-    let buildOpts = ["-c", dataFolder, "-s", String(fsSize), imageFile];
+    // Calculate WL layout - the FAT image must be smaller than the partition
+    // to leave room for the wear-leveling state structures
+    const wlLayout = calculateWLLayout(fsSize);
+    writeEmitter.fire(blue("    WL Data: ") + green((wlLayout.flashSize / 1024) + " KB (usable for FAT after WL overhead)") + "\r\n");
+
+    // Build the FAT image using mkfatfs with the WL-adjusted size
+    let rawImageFile = imageFile + ".raw";
+    let buildOpts = ["-c", dataFolder, "-s", String(wlLayout.flashSize), rawImageFile];
 
     // List all files that will be included in the FFAT image
     writeEmitter.fire(bold("\r\nFiles to be included:\r\n"));
@@ -460,9 +575,9 @@ async function doOperation(context: vscode.ExtensionContext, arduinoContext: Ard
             : (totalSize / (1024 * 1024)).toFixed(2) + " MB";
     writeEmitter.fire(blue("\r\n  Total: ") + green(totalFiles + " file(s), " + totalSizeStr) + "\r\n");
 
-    // Check if data fits in partition
-    if (totalSize > fsSize) {
-        writeEmitter.fire(red("\r\n\r\nWARNING: Data size (" + totalSizeStr + ") may exceed partition size (" + (fsSize / 1024) + " KB). Build may fail.\r\n"));
+    // Check if data fits in the usable FAT area (after WL overhead)
+    if (totalSize > wlLayout.flashSize) {
+        writeEmitter.fire(red("\r\n\r\nWARNING: Data size (" + totalSizeStr + ") may exceed usable FAT area (" + (wlLayout.flashSize / 1024) + " KB). Build may fail.\r\n"));
     }
 
     writeEmitter.fire(bold("\r\nBuilding FFAT filesystem\r\n"));
@@ -471,6 +586,21 @@ async function doOperation(context: vscode.ExtensionContext, arduinoContext: Ard
     let exitCode = await runCommand(mkfatfs, buildOpts);
     if (exitCode) {
         writeEmitter.fire(red("\r\n\r\nERROR: mkfatfs failed, error code: " + String(exitCode) + "\r\n\r\n"));
+        return;
+    }
+
+    // Wrap the raw FAT image with ESP32 Wear-Leveling layer
+    writeEmitter.fire(bold("\r\nAdding Wear-Leveling (WL) layer\r\n"));
+    try {
+        const rawData = fs.readFileSync(rawImageFile);
+        const wlImage = wrapWithWearLeveling(Buffer.from(rawData), fsSize);
+        fs.writeFileSync(imageFile, wlImage);
+        // Clean up raw image
+        try { fs.unlinkSync(rawImageFile); } catch { }
+        writeEmitter.fire(green("WL layer added successfully.") + blue(" Image size: " + (wlImage.length / 1024) + " KB") + "\r\n");
+    } catch (e: any) {
+        writeEmitter.fire(red("\r\n\r\nERROR: Failed to add WL layer: " + e.message + "\r\n\r\n"));
+        try { fs.unlinkSync(rawImageFile); } catch { }
         return;
     }
 

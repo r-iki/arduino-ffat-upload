@@ -4,6 +4,8 @@ FFAT (FAT Filesystem) uploader dan builder untuk ESP32 pada **Arduino IDE 2.2.1*
 
 Digunakan bersama [ESP32 Arduino core](https://github.com/espressif/arduino-esp32).
 
+> **Kompatibel dengan ESP32 Arduino Core 3.x (ESP-IDF 5.x)** — Image FFAT yang dihasilkan sudah menyertakan **Wear-Leveling (WL) layer** sehingga langsung kompatibel dengan `FFat.begin()` tanpa format ulang.
+
 MIT Licensed, lihat [LICENSE.md](LICENSE.md).
 
 ---
@@ -12,6 +14,7 @@ MIT Licensed, lihat [LICENSE.md](LICENSE.md).
 
 - **Upload FFAT** — Build dan upload FFAT filesystem image ke ESP32 via serial atau OTA (network)
 - **Build FFAT** — Build FFAT filesystem image (`mkfatfs.bin`) di folder sketch tanpa upload
+- **Wear-Leveling (WL) layer** — Otomatis ditambahkan agar kompatibel dengan ESP-IDF 5.x / Arduino Core 3.x
 - Otomatis membaca partition scheme dari board yang dipilih
 - Support custom `partitions.csv` di folder sketch
 - Support semua varian ESP32 (ESP32, ESP32-S2, ESP32-S3, ESP32-C3, dll.)
@@ -251,6 +254,7 @@ FFAT (FAT filesystem) uploader and builder compatible with Arduino IDE 2.2.1 or 
 
 - **Upload FFAT** to ESP32 via serial or OTA (network)
 - **Build FFAT image** in sketch directory without uploading
+- **Wear-Leveling (WL) layer** automatically added for ESP-IDF 5.x / Arduino Core 3.x compatibility
 - Automatic partition scheme detection from board configuration
 - Support for custom `partitions.csv` in sketch folder
 - Colored terminal output with progress information
@@ -325,8 +329,12 @@ Compile the sketch at least once before uploading the filesystem. This ensures t
 ## How It Works
 
 1. Reads the partition table (CSV) to find the FAT partition offset and size
-2. Uses `mkfatfs` tool (bundled with ESP32 core) to create a FAT filesystem image from the `data` folder
-3. Uses `esptool` to flash the image to the correct offset on the ESP32
+2. Calculates the Wear-Leveling (WL) layout to determine the usable FAT data size
+3. Uses `mkfatfs` tool (bundled with ESP32 core) to create a raw FAT filesystem image from the `data` folder
+4. Wraps the raw FAT image with an ESP-IDF compatible WL layer (config, state, and sector mapping)
+5. Uses `esptool` to flash the final WL-wrapped image to the correct offset on the ESP32
+
+> **Catatan:** ESP32 Arduino Core 3.x (ESP-IDF 5.x) menggunakan wear-leveling layer untuk FFAT. Image tanpa WL layer (seperti yang dibuat oleh `mkfatfs` saja) akan menyebabkan `FFat.begin()` gagal mount dan memformat ulang filesystem. Extension ini menangani hal tersebut secara otomatis.
 
 ## License
 
