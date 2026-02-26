@@ -427,6 +427,44 @@ async function doOperation(context: vscode.ExtensionContext, arduinoContext: Ard
     // mkfatfs options: -c <data_dir> -s <size> [-S <sector_size>] <image_file>
     let buildOpts = ["-c", dataFolder, "-s", String(fsSize), imageFile];
 
+    // List all files that will be included in the FFAT image
+    writeEmitter.fire(bold("\r\nFiles to be included:\r\n"));
+    let totalFiles = 0;
+    let totalSize = 0;
+    const listFiles = (dir: string, prefix: string = "") => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = prefix ? prefix + "/" + entry.name : entry.name;
+            if (entry.isDirectory()) {
+                writeEmitter.fire(blue("  [DIR]  ") + green(relativePath + "/") + "\r\n");
+                listFiles(fullPath, relativePath);
+            } else {
+                const stat = fs.statSync(fullPath);
+                totalFiles++;
+                totalSize += stat.size;
+                const sizeStr = stat.size < 1024
+                    ? stat.size + " B"
+                    : stat.size < 1024 * 1024
+                        ? (stat.size / 1024).toFixed(1) + " KB"
+                        : (stat.size / (1024 * 1024)).toFixed(2) + " MB";
+                writeEmitter.fire(yellow("  [FILE] ") + green(relativePath) + blue(" (" + sizeStr + ")") + "\r\n");
+            }
+        }
+    };
+    listFiles(dataFolder);
+    const totalSizeStr = totalSize < 1024
+        ? totalSize + " B"
+        : totalSize < 1024 * 1024
+            ? (totalSize / 1024).toFixed(1) + " KB"
+            : (totalSize / (1024 * 1024)).toFixed(2) + " MB";
+    writeEmitter.fire(blue("\r\n  Total: ") + green(totalFiles + " file(s), " + totalSizeStr) + "\r\n");
+
+    // Check if data fits in partition
+    if (totalSize > fsSize) {
+        writeEmitter.fire(red("\r\n\r\nWARNING: Data size (" + totalSizeStr + ") may exceed partition size (" + (fsSize / 1024) + " KB). Build may fail.\r\n"));
+    }
+
     writeEmitter.fire(bold("\r\nBuilding FFAT filesystem\r\n"));
     writeEmitter.fire(blue("Command Line: ") + green(mkfatfs + " " + buildOpts.join(" ")) + "\r\n\r\n");
 
